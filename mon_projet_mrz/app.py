@@ -1,11 +1,12 @@
 import os
-import re
 
 import cv2
 import easyocr
 import numpy as np
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
+
+from ocr_parser import parse_results
 
 load_dotenv()
 
@@ -15,27 +16,6 @@ OCR_GPU = os.getenv("OCR_GPU", "false").lower() == "true"
 
 app = Flask(__name__)
 reader = easyocr.Reader(["fr", "en"], gpu=OCR_GPU)
-CIN_PATTERN = re.compile(r"\b[A-Z]{1,2}[0-9]{5,6}\b", re.IGNORECASE)
-
-
-def parse_results(results):
-    """results : liste [(bbox, texte, confiance), ...] renvoyée par EasyOCR."""
-    cin = nom = prenom = ""
-
-    for _, text, _ in results:
-        cleaned = text.strip()
-        if not cin and CIN_PATTERN.match(cleaned):
-            cin = cleaned.upper()
-
-    if results:
-        # Dernière ligne MRZ = ligne la plus basse de l'image
-        last_line = max(results, key=lambda r: max(point[1] for point in r[0]))
-        parts = last_line[1].strip().split("<<", 1)
-        if len(parts) == 2:
-            nom = parts[0].replace("<", "").strip()
-            prenom = parts[1].replace("<", "").strip()
-
-    return {"cin": cin, "nom": nom, "prenom": prenom}
 
 
 def extract_info_with_easyocr(image_bytes):
