@@ -13,7 +13,7 @@ import {
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRoute, useNavigation } from "@react-navigation/native";
 import { animalsApi } from "../api";
-import NfcManager, { NfcTech, Ndef } from "react-native-nfc-manager";
+import { writeTagWithRetry } from "../nfc/writeFlow";
 import { Ionicons } from "@expo/vector-icons";
 import Animated, {
   useSharedValue,
@@ -112,51 +112,6 @@ export default function SellAnimalScreen({ route }) {
     }
   };
 
-  const writeOwnerToNfcTag = async (animalData, ownerData) => {
-    try {
-      await NfcManager.requestTechnology(NfcTech.Ndef);
-      const tag = await NfcManager.getTag();
-      const tagId = tag?.id || null;
-
-      // Format compressé similaire à AddAnimalScreen
-      const compressedData = {
-        n: animalData.nom,
-        r: animalData.race,
-        a: animalData.age,
-        o: animalData.ownerId,
-        t: tagId,
-        pn: ownerData.nom,
-        pp: ownerData.prenom,
-        pc: ownerData.cin,
-        pt: ownerData.telephone,
-        pe: ownerData.email || "",
-      };
-
-      const jsonString = JSON.stringify(compressedData);
-
-      // Vérification de la taille des données
-      if (jsonString.length > 8000) {
-        Alert.alert(
-          "Attention",
-          "Les données sont trop volumineuses pour ce tag NFC.",
-        );
-      }
-
-      const bytes = Ndef.encodeMessage([Ndef.textRecord(jsonString)]);
-      if (bytes) {
-        await NfcManager.ndefHandler.writeNdefMessage(bytes);
-        Alert.alert("Succès", `Les données ont été écrites sur le tag.`);
-        return tagId;
-      }
-      return null;
-    } catch (error) {
-      console.error("Erreur écriture NFC:", error);
-      throw error;
-    } finally {
-      await NfcManager.cancelTechnologyRequest();
-    }
-  };
-
   const handleTransfer = async () => {
     if (!selectedAnimalId)
       return Alert.alert("Erreur", "Veuillez sélectionner un animal.");
@@ -170,37 +125,32 @@ export default function SellAnimalScreen({ route }) {
     setLoading(true);
 
     try {
+      const selectedAnimal = animals.find((a) => a.id === selectedAnimalId);
       await animalsApi.transfer(selectedAnimalId, userInfo.cin, cinAcheteur);
 
-      const selectedAnimal = animals.find((a) => a.id === selectedAnimalId);
-
-      // Préparer les données pour le NFC avec format compressé
-      const animalData = {
-        nom: selectedAnimal.nom,
-        race: selectedAnimal.race,
-        age: selectedAnimal.age,
-        ownerId: selectedAnimal.id, // ou un autre identifiant approprié
-      };
-
-      const ownerData = {
-        nom: nomAcheteur,
-        prenom: prenomAcheteur,
-        cin: cinAcheteur,
-        telephone: telAcheteur,
-        email: emailAcheteur,
-      };
+      // Le tag garde le même identifiant : on y met seulement le contact du nouveau propriétaire
+      let written = false;
+      if (selectedAnimal?.publicId) {
+        written = await writeTagWithRetry(
+          {
+            publicId: selectedAnimal.publicId,
+            nom: selectedAnimal.nom,
+            telephone: telAcheteur,
+          },
+          {
+            intro:
+              "Vente enregistrée. Approchez le tag NFC de l'animal pour y mettre le contact du nouveau propriétaire.",
+          },
+        );
+      }
 
       Alert.alert(
-        "Approchez le tag NFC pour écrire les données du nouveau propriétaire...",
+        written ? "Succès" : "Vente enregistrée",
+        written
+          ? "Le tag NFC a été mis à jour."
+          : "Le tag n'a pas été mis à jour : le nouveau propriétaire pourra le reprogrammer depuis « Modifier un animal ».",
       );
-      const tagId = await writeOwnerToNfcTag(animalData, ownerData);
-
-      if (tagId) {
-        Alert.alert("Succès", `Données écrites sur le tag NFC (UID: ${tagId})`);
-        navigation.navigate("Home", { screen: "Animaux" });
-      } else {
-        Alert.alert("Erreur", "Impossible d'écrire sur le tag NFC.");
-      }
+      navigation.navigate("Home", { screen: "Animaux" });
 
       // Réinitialiser les champs
       setSelectedAnimalId(null);
@@ -210,7 +160,10 @@ export default function SellAnimalScreen({ route }) {
       setTelAcheteur("");
       setEmailAcheteur("");
     } catch (error) {
-      Alert.alert("Erreur", error.response?.data || "Échec du transfert");
+      Alert.alert(
+        "Erreur",
+        error.response?.data?.message || "Échec du transfert",
+      );
     } finally {
       setLoading(false);
     }

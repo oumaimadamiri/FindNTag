@@ -64,15 +64,16 @@ export default function ScanBuyerCardScreen() {
         Alert.alert("Erreur OCR", "Impossible d'extraire le CIN");
         return;
       }
-      const exists = await usersApi.checkCin(cin);
-      if (!exists) {
-        Alert.alert(
-          "Utilisateur introuvable",
-          "Aucun utilisateur avec cette CIN.",
-        );
-        return;
+            let buyerInfo;
+      try {
+        buyerInfo = await usersApi.lookup(cin);
+      } catch (e) {
+        if (e.response?.status === 404) {
+          Alert.alert("Utilisateur introuvable", "Aucun utilisateur avec cette CIN.");
+          return;
+        }
+        throw e;
       }
-      const buyerInfo = await usersApi.getByCin(cin);
       await AsyncStorage.setItem("buyerInfo", JSON.stringify(buyerInfo));
       navigation.navigate("SellAnimal", {
         userInfo: route.params?.userInfo,

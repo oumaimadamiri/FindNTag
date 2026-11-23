@@ -11,7 +11,7 @@ import {
   Modal,
   Dimensions,
 } from "react-native";
-import NfcManager, { NfcTech, Ndef } from "react-native-nfc-manager";
+import { writeTagWithRetry } from "../nfc/writeFlow";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as ImagePicker from "expo-image-picker";
@@ -98,21 +98,8 @@ export default function AddAnimalScreen() {
     }
   };
 
-  // Fonction pour compresser l'image
-  const compressImage = async (base64String) => {
-    try {
-      // Vérifier la taille et compresser si nécessaire
-      if (base64String.length > 50000) {
-        // Si > 50KB
-        console.log("Image trop grande, compression appliquée");
-        return base64String.substring(0, 50000);
-      }
-      return base64String;
-    } catch (error) {
-      console.error("Erreur compression image:", error);
-      return null;
-    }
-  };
+  // Pas de troncature : couper un base64 corrompt l'image (JPEG incomplet)
+  const compressImage = async (base64String) => base64String;
 
   // Fonction pour sélectionner une image
   const selectImage = () => {
@@ -218,53 +205,6 @@ export default function AddAnimalScreen() {
     setImageBase64(null);
   };
 
-  const writeAnimalToNfcTag = async (animalData, ownerData) => {
-    try {
-      await NfcManager.requestTechnology(NfcTech.Ndef);
-      const tag = await NfcManager.getTag();
-      const tagId = tag?.id || null;
-
-      const compressedData = {
-        n: animalData.nom,
-        r: animalData.race,
-        a: animalData.age,
-        o: animalData.ownerId,
-        t: tagId,
-        pn: ownerData.nom,
-        pp: ownerData.prenom,
-        pc: ownerData.cin,
-        pt: ownerData.telephone,
-        pe: ownerData.email || "",
-        img: imageBase64 ? imageBase64.substring(0, 2000) : null,
-      };
-
-      const jsonString = JSON.stringify(compressedData);
-
-      if (jsonString.length > 8000) {
-        Alert.alert(
-          "Attention",
-          "Les données sont trop volumineuses pour ce tag NFC.",
-        );
-        compressedData.img = imageBase64
-          ? imageBase64.substring(0, 1000)
-          : null;
-      }
-
-      const bytes = Ndef.encodeMessage([Ndef.textRecord(jsonString)]);
-
-      if (bytes) {
-        await NfcManager.ndefHandler.writeNdefMessage(bytes);
-        return tagId;
-      }
-      return null;
-    } catch (error) {
-      console.error("Erreur écriture NFC:", error);
-      throw error;
-    } finally {
-      await NfcManager.cancelTechnologyRequest();
-    }
-  };
-
   const handleWriteNfc = async () => {
     if (!nom || !race || !age) {
       Alert.alert("Erreur", "Veuillez remplir tous les champs obligatoires.");
@@ -288,39 +228,33 @@ export default function AddAnimalScreen() {
     }
     try {
       setLoading(true);
-      Alert.alert("Approchez le tag NFC pour écrire les données...");
-      const tagId = await writeAnimalToNfcTag(
-        { nom, race, age: parseInt(age), ownerId: userInfo.id },
-        {
-          nom: userData.nom,
-          prenom: userData.prenom,
-          cin: userData.cin,
-          telephone: userData.telephone,
-          email: userData.email || "",
-        },
-      );
 
-      if (!tagId) {
-        Alert.alert("Erreur", "Échec de l'écriture NFC");
-        return;
-      }
-
-      const animalData = {
+      // 1. L'animal est d'abord enregistré : le serveur lui attribue son identifiant public
+      const created = await animalsApi.create({
         nom,
         race,
         age,
-        tagId,
-        ownerId: userInfo.id,
         image: imageBase64,
-      };
-      
-      await animalsApi.create(animalData);
+      });
       await AsyncStorage.removeItem("pendingAnimal");
-      Alert.alert("Succès", `${nom} a été enregistré avec succès!`);
+
+      // 2. Le tag reçoit uniquement cet identifiant, le nom et le téléphone du propriétaire
+      const written = await writeTagWithRetry({
+        publicId: created.publicId,
+        nom,
+        telephone: userData.telephone,
+      });
+
+      Alert.alert(
+        written ? "Succès" : "Animal enregistré",
+        written
+          ? `${nom} a été enregistré avec succès !`
+          : `${nom} est enregistré, mais son tag n'a pas été écrit. Vous pourrez le programmer depuis « Modifier un animal ».`,
+      );
       navigation.navigate("Home", { screen: "Animaux" });
     } catch (error) {
       console.error(error);
-      Alert.alert("Erreur", error.message);
+      Alert.alert("Erreur", error.response?.data?.message || error.message);
     } finally {
       setLoading(false);
     }
@@ -822,107 +756,4 @@ export default function AddAnimalScreen() {
       </Modal>
     </ScrollView>
   );
-  // return (
-  //   <ScrollView
-  //     className="flex-1 bg-gradient-to-br from-purple-50 to-violet-100"
-  //     contentContainerStyle={{ paddingHorizontal: 24, paddingVertical: 16 }}
-  //     showsVerticalScrollIndicator={false}
-  //   >
-  //     <View className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 shadow-lg shadow-purple-200/50 mb-4">
-  //       <Text className="text-2xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-violet-600 text-center">
-  //         Ajouter un Animal
-  //       </Text>
-  //     </View>
-
-  //     <View className="space-y-4">
-  //       <TextInput
-  //         className="bg-white/90 border-2 border-purple-200 focus:border-purple-400 rounded-xl px-5 py-4 text-base text-purple-800 font-medium shadow-sm shadow-purple-100"
-  //         placeholder="Nom de l'animal"
-  //         placeholderTextColor="#a855f7"
-  //         value={nom}
-  //         onChangeText={setNom}
-  //       />
-  //       <TextInput
-  //         className="bg-white/90 border-2 border-purple-200 focus:border-purple-400 rounded-xl px-5 py-4 text-base text-purple-800 font-medium shadow-sm shadow-purple-100"
-  //         placeholder="Race"
-  //         placeholderTextColor="#a855f7"
-  //         value={race}
-  //         onChangeText={setRace}
-  //       />
-  //       <TextInput
-  //         className="bg-white/90 border-2 border-purple-200 focus:border-purple-400 rounded-xl px-5 py-4 text-base text-purple-800 font-medium shadow-sm shadow-purple-100"
-  //         placeholder="Âge"
-  //         placeholderTextColor="#a855f7"
-  //         value={age}
-  //         onChangeText={setAge}
-  //         keyboardType="numeric"
-  //       />
-
-  //       {userInfo.cin && userData && (
-  //         <View className="bg-gradient-to-r from-blue-50 to-indigo-100 rounded-xl p-4 mt-6 border-2 border-blue-200">
-  //           <Text className="text-blue-700 font-semibold text-center mb-3">
-  //             📋 Informations du propriétaire (seront incluses dans le tag NFC)
-  //           </Text>
-
-  //           <TextInput
-  //             className="bg-blue-50 text-blue-800 border border-blue-300 rounded-lg px-4 py-3 text-base mb-3 font-medium"
-  //             value={userData?.nom || ''}
-  //             placeholder="Nom utilisateur"
-  //             editable={false}
-  //           />
-  //           <TextInput
-  //             className="bg-blue-50 text-blue-800 border border-blue-300 rounded-lg px-4 py-3 text-base mb-3 font-medium"
-  //             value={userData?.prenom || ''}
-  //             placeholder="Prénom utilisateur"
-  //             editable={false}
-  //           />
-  //           <TextInput
-  //             className="bg-blue-50 text-blue-800 border border-blue-300 rounded-lg px-4 py-3 text-base font-medium"
-  //             value={userData?.telephone || ''}
-  //             placeholder="Téléphone"
-  //             editable={false}
-  //           />
-
-  //           <Text className="text-blue-600 text-xs text-center mt-2 font-medium">
-  //             Ces informations seront écrites sur le tag NFC avec les données de l'animal
-  //           </Text>
-  //         </View>
-  //       )}
-
-  //       {(!userInfo.cin || !userData) && (
-  //         <View className="bg-gradient-to-r from-yellow-50 to-orange-100 rounded-xl p-4 mt-6 border-2 border-yellow-200">
-  //           <Text className="text-yellow-700 font-semibold text-center mb-2">
-  //             ⚠️ Connexion requise
-  //           </Text>
-  //           <Text className="text-yellow-600 text-center text-sm">
-  //             Connectez-vous pour que vos informations de contact soient incluses dans le tag NFC
-  //           </Text>
-  //         </View>
-  //       )}
-  //     </View>
-
-  //     <View className="mt-8">
-  //       {loading ? (
-  //         <View className="bg-white/80 rounded-2xl py-6 items-center shadow-lg shadow-purple-200/50">
-  //           <ActivityIndicator size="large" color="#8b5cf6" />
-  //           <Text className="text-purple-600 font-semibold mt-3">
-  //             Écriture en cours...
-  //           </Text>
-  //         </View>
-  //       ) : (
-  //         <TouchableOpacity
-  //           className="bg-gradient-to-r from-purple-500 to-violet-600 rounded-2xl py-5 shadow-lg shadow-purple-300/50"
-  //           onPress={handleWriteNfc}
-  //         >
-  //           <Text className="text-white text-center text-lg font-bold">
-  //             Écrire sur le tag NFC
-  //           </Text>
-  //           <Text className="text-purple-100 text-center text-sm font-medium mt-1">
-  //             Données complètes: animal + propriétaire
-  //           </Text>
-  //         </TouchableOpacity>
-  //       )}
-  //     </View>
-  //   </ScrollView>
-  // );
 }

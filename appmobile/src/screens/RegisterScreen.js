@@ -120,8 +120,6 @@ export default function RegisterScreen() {
     }
   };
 
-  // Dans RegisterScreen.js, modifiez la fonction onSubmit
-
   const onSubmit = async (data) => {
     if (!image) {
       Alert.alert("Image requise", "Veuillez prendre une photo de votre CIN.");
@@ -129,34 +127,34 @@ export default function RegisterScreen() {
     }
     try {
       const user = await authApi.register(image, data);
-      const userEmail = user?.email || data.email;
-      if (!userEmail) {
-        Alert.alert("Erreur", "Email manquant dans la réponse.");
-        return;
-      }
       try {
-        await authApi.sendOtp(userEmail);
+        const { maskedEmail } = await authApi.requestOtp(user.cin);
         Alert.alert(
           "Succès",
-          "Un code de vérification a été envoyé à votre email.",
+          `Un code de vérification a été envoyé à ${maskedEmail}.`,
         );
         navigation.navigate("EnterPin", {
-          email: userEmail,
-          mode: "register",
-          userInfo: user,
+          cin: user.cin,
+          maskedEmail,
           redirectTo: "PostRegisterChoice",
         });
       } catch (otpError) {
         console.error("Erreur envoi OTP:", otpError);
-        Alert.alert("Erreur", "Impossible d'envoyer le code de vérification.");
+        Alert.alert(
+          "Erreur",
+          otpError.response?.data?.message ||
+            "Impossible d'envoyer le code de vérification.",
+        );
       }
     } catch (error) {
       console.error("Erreur inscription:", error);
-      const message =
-        error.response?.status === 409
-          ? "Cette CIN est déjà inscrite."
-          : "Échec de l'inscription.";
-      Alert.alert("Erreur", message);
+      Alert.alert(
+        "Erreur",
+        error.response?.data?.message ||
+          (error.response?.status === 409
+            ? "Cette CIN est déjà inscrite."
+            : "Échec de l'inscription."),
+      );
     }
   };
 

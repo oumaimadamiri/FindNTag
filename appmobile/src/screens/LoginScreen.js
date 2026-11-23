@@ -98,54 +98,33 @@ export default function LoginScreen() {
     }
   };
 
-  const verifyCin = async (uri) => {
+    const verifyCin = async (uri) => {
     setLoading(true);
     try {
       const { cin } = await ocrApi.extractCin(uri);
       if (!cin) {
-        Alert.alert(
-          "Erreur",
-          "Impossible d'extraire les informations de la CIN.",
-        );
-        return;
-      }
-      const exists = await usersApi.checkCin(cin);
-      if (!exists) {
-        Alert.alert(
-          "Utilisateur non trouvé",
-          "Aucun compte associé à cette CIN.",
-        );
-        return;
-      }
-      const userInfo = await usersApi.getByCin(cin);
-      await AsyncStorage.setItem("cin", cin);
-      await AsyncStorage.setItem("userInfo", JSON.stringify(userInfo));
-
-      if (!userInfo.email) {
-        Alert.alert(
-          "Erreur",
-          "Email manquant dans les informations utilisateur.",
-        );
+        Alert.alert("Erreur", "Impossible d'extraire les informations de la CIN.");
         return;
       }
       try {
-        await authApi.sendOtp(userInfo.email);
+        const { maskedEmail } = await authApi.requestOtp(cin);
+        Alert.alert("Code envoyé", `Un code a été envoyé à ${maskedEmail}.`);
         navigation.navigate("EnterPin", {
-          email: userInfo.email,
-          mode: "login",
+          cin,
+          maskedEmail,
           redirectTo: route.params?.redirectTo || "Home",
-          userInfo,
         });
-      } catch (otpError) {
-        console.error("Erreur envoi OTP login:", otpError);
-        Alert.alert("Erreur", "Impossible d'envoyer le code de vérification.");
+      } catch (e) {
+        const status = e.response?.status;
+        if (status === 404) {
+          Alert.alert("Utilisateur non trouvé", "Aucun compte associé à cette CIN.");
+        } else {
+          Alert.alert("Erreur", e.response?.data?.message || "Impossible d'envoyer le code de vérification.");
+        }
       }
     } catch (e) {
       console.error("Erreur de vérification:", e);
-      Alert.alert(
-        "Erreur de vérification",
-        "Problème de connexion au serveur.",
-      );
+      Alert.alert("Erreur de vérification", "Problème de connexion au serveur.");
     } finally {
       setLoading(false);
     }

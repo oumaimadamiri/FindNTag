@@ -1,99 +1,88 @@
-import React, { useState } from "react";
+import React, { useContext, useState } from "react";
 import { View, TextInput, Text, Button, Alert } from "react-native";
-import NfcManager, { NfcTech, Ndef } from "react-native-nfc-manager";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import { animalsApi } from "../api";
+import { UserContext } from "../context/UserContext";
+import { readAnimalTag } from "../nfc/animalTag";
+import { writeTagWithRetry } from "../nfc/writeFlow";
 
 export default function EditAnimalScreen() {
   const navigation = useNavigation();
   const route = useRoute();
-  const userInfo = route.params?.userInfo || {};
+  const { userInfo: contextUser } = useContext(UserContext);
+  const userInfo = route.params?.userInfo || contextUser || {};
 
   const [animalData, setAnimalData] = useState({
     id: "",
+    publicId: "",
     nom: "",
     race: "",
     age: "",
-    ownerId: "",
-    nomProprio: "",
-    prenomProprio: "",
-    cinProprio: "",
     telephone: "",
-    email: "",
-    tagId: "",
   });
 
   const [tagRead, setTagRead] = useState(false);
-  const [isConnected, setIsConnected] = useState(
-    userInfo.nom && userInfo.prenom && userInfo.telephone,
-  );
+  const [legacyTag, setLegacyTag] = useState(false);
+  const isConnected = !!(userInfo.cin && userInfo.nom);
 
   const handleScanNfc = async () => {
+    if (!isConnected) {
+      Alert.alert(
+        "Authentification requise",
+        "Vous devez vous reconnecter pour modifier un animal.",
+        [
+          {
+            text: "Se reconnecter",
+            onPress: () =>
+              navigation.navigate("Login", { redirectTo: "EditAnimal" }),
+          },
+        ],
+      );
+      return;
+    }
+
     try {
-      await NfcManager.start();
-      await NfcManager.requestTechnology(NfcTech.Ndef);
-      const tag = await NfcManager.getTag();
+      Alert.alert("Lecture du tag", "Approchez le tag NFC de l'animal...");
+      const tag = await readAnimalTag();
 
-      if (tag.ndefMessage && tag.ndefMessage.length > 0) {
-        const payload = tag.ndefMessage[0].payload;
-        const text = Ndef.text.decodePayload(payload);
-        const data = JSON.parse(text);
-        const tagId = tag.id || tag.serialNumber || "";
-
-        console.log("Données lues depuis NFC:", data);
-
-        // CORRECTION: Récupérer l'ID de l'animal depuis la base de données
-        // en utilisant le tagId ou les informations de l'animal
-        const animalId = await fetchAnimalIdByTag(tagId, data);
-
-        setAnimalData({
-          id: animalId || "", // ID récupéré depuis la base
-          nom: data.n || "",
-          race: data.r || "",
-          age: data.a ? data.a.toString() : "",
-          ownerId: data.o || "",
-          nomProprio: data.pn || userInfo.nom || "",
-          prenomProprio: data.pp || userInfo.prenom || "",
-          cinProprio: data.pc || userInfo.cin || "",
-          telephone: data.pt || userInfo.telephone || "",
-          email: data.pe || userInfo.email || "",
-          tagId: tagId,
-        });
-        setTagRead(true);
-
-        if (!isConnected) {
-          Alert.alert(
-            "Authentification requise",
-            "Vous devez vous reconnecter pour modifier un animal.",
-            [
-              {
-                text: "Se reconnecter",
-                onPress: () =>
-                  navigation.navigate("Login", { redirectTo: "EditAnimal" }),
-              },
-            ],
-          );
-        }
-      } else {
-        Alert.alert("Erreur", "Aucune donnée NDEF trouvée sur le tag.");
+      if (tag.kind === "empty") {
+        Alert.alert("Tag vide", "Ce tag ne contient aucun animal.");
+        return;
       }
+
+      // On ne retrouve que SES animaux (le serveur répond 404 pour ceux des autres)
+      let animal = null;
+      try {
+        if (tag.kind === "v2") {
+          animal = await animalsApi.getByPublicId(tag.publicId);
+        } else if (tag.tagUid) {
+          animal = await animalsApi.getByTag(tag.tagUid); // ancien format
+        }
+      } catch (error) {
+        if (error.response?.status !== 404) throw error;
+      }
+
+      if (!animal) {
+        Alert.alert(
+          "Animal introuvable",
+          "Ce tag ne correspond à aucun de vos animaux.",
+        );
+        return;
+      }
+
+      setAnimalData({
+        id: animal.id,
+        publicId: animal.publicId,
+        nom: animal.nom ?? "",
+        race: animal.race ?? "",
+        age: animal.age != null ? String(animal.age) : "",
+        telephone: animal.ownerTelephone || userInfo.telephone || "",
+      });
+      setLegacyTag(tag.kind === "legacy");
+      setTagRead(true);
     } catch (error) {
       console.warn("Erreur lecture NFC:", error);
       Alert.alert("Erreur", "Échec de lecture du tag NFC.");
-    } finally {
-      await NfcManager.cancelTechnologyRequest();
-    }
-  };
-
-  const fetchAnimalIdByTag = async (tagId) => {
-    if (!tagId) return null;
-    try {
-      const animal = await animalsApi.getByTag(tagId);
-      return animal.id;
-    } catch (error) {
-      if (error.response?.status !== 404)
-        console.error("Erreur recherche animal:", error);
-      return null;
     }
   };
 
@@ -112,52 +101,39 @@ export default function EditAnimalScreen() {
     }
 
     try {
-      const updatedAnimal = {
+      await animalsApi.update(animalData.id, {
         nom: animalData.nom,
         race: animalData.race,
         age: parseInt(animalData.age),
-        tagId: animalData.tagId || "",
-        ownerId: animalData.ownerId,
-      };
+      });
 
-      console.log("Mise à jour animal ID:", animalData.id);
-      console.log("Données à envoyer:", updatedAnimal);
+      // Réécriture du tag au nouveau format (migre aussi les anciens tags)
+      const written = await writeTagWithRetry(
+        {
+          publicId: animalData.publicId,
+          nom: animalData.nom,
+          telephone: animalData.telephone,
+        },
+        {
+          intro: legacyTag
+            ? "Ce tag utilise l'ancien format. Il va être reprogrammé : le CIN et l'email du propriétaire n'y seront plus écrits."
+            : "Informations enregistrées. Approchez le tag NFC pour le mettre à jour.",
+        },
+      );
 
-      const response = await animalsApi.update(animalData.id, updatedAnimal);
-
-      console.log("Animal mis à jour dans la base de données");
-
-      // Mise à jour du tag NFC
-      await NfcManager.requestTechnology(NfcTech.Ndef);
-      const compressed = {
-        n: updatedAnimal.nom,
-        r: updatedAnimal.race,
-        a: updatedAnimal.age,
-        o: animalData.ownerId,
-        t: animalData.tagId,
-        pn: animalData.nomProprio,
-        pp: animalData.prenomProprio,
-        pc: animalData.cinProprio,
-        pt: animalData.telephone,
-        pe: animalData.email,
-      };
-
-      const jsonToWrite = JSON.stringify(compressed);
-      const bytes = Ndef.encodeMessage([Ndef.textRecord(jsonToWrite)]);
-
-      if (bytes) {
-        await NfcManager.ndefHandler.writeNdefMessage(bytes);
-        Alert.alert("Succès", "Animal mis à jour dans la base et sur le tag.");
-        navigation.navigate("Home", { screen: "Animaux" });
-      }
+      Alert.alert(
+        written ? "Succès" : "Animal mis à jour",
+        written
+          ? "Animal mis à jour dans la base et sur le tag."
+          : "Animal mis à jour dans la base, mais le tag n'a pas été réécrit.",
+      );
+      navigation.navigate("Home", { screen: "Animaux" });
     } catch (error) {
       console.error("Erreur de mise à jour:", error);
       Alert.alert(
         "Erreur",
-        `Impossible de modifier l'animal: ${error.message}`,
+        `Impossible de modifier l'animal: ${error.response?.data?.message || error.message}`,
       );
-    } finally {
-      await NfcManager.cancelTechnologyRequest();
     }
   };
 
@@ -182,15 +158,19 @@ export default function EditAnimalScreen() {
         </View>
       )}
 
-      {tagRead && isConnected && (
+      {tagRead && (
         <View className="bg-purple-50 p-6 rounded-xl border border-purple-200">
           <Text className="text-purple-700 font-semibold text-lg mb-4 text-center">
             Informations de l'animal
           </Text>
 
-          {animalData.id && (
-            <Text className="text-green-600 text-center mb-4">
-              ✓ Animal trouvé (ID: {animalData.id})
+          <Text className="text-green-600 text-center mb-4">
+            ✓ Animal trouvé
+          </Text>
+
+          {legacyTag && (
+            <Text className="text-orange-600 text-center mb-4 text-sm">
+              Ancien tag détecté : il sera reprogrammé au nouveau format.
             </Text>
           )}
 
@@ -228,14 +208,6 @@ export default function EditAnimalScreen() {
               color="#7c3aed"
             />
           </View>
-        </View>
-      )}
-
-      {tagRead && !isConnected && (
-        <View className="bg-purple-50 p-6 rounded-xl border border-purple-200">
-          <Text className="text-purple-700 text-center text-base font-medium">
-            Vous devez vous reconnecter pour modifier les données de l'animal.
-          </Text>
         </View>
       )}
     </View>

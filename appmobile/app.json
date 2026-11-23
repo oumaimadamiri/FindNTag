@@ -7,7 +7,6 @@
       [
         "expo-notifications",
         {
-          "icon": "./assets/notification-icon.png",
           "color": "#8B5CF6",
           "mode": "production",
           "androidMode": "collapse",
@@ -16,7 +15,6 @@
       ]
     ],
     "android": {
-      "googleServicesFile": "./google-services.json",
       "useNextNotificationsApi": true,
       "permissions": ["RECEIVE_BOOT_COMPLETED"]
     },

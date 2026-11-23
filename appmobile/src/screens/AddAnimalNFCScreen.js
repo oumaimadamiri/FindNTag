@@ -12,7 +12,7 @@ import {
   ScrollView,
   ActivityIndicator,
 } from "react-native";
-import NfcManager, { Ndef, NfcTech } from "react-native-nfc-manager";
+import { writeTagWithRetry } from "../nfc/writeFlow";
 import { usersApi, animalsApi } from "../api";
 import { useRoute, useNavigation } from "@react-navigation/native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -78,50 +78,6 @@ export default function AddAnimalNFCScreen() {
     loadPendingData();
   }, []);
 
-  const writeAnimalToNfcTag = async (animalData, ownerData) => {
-    try {
-      await NfcManager.requestTechnology(NfcTech.Ndef);
-      const tag = await NfcManager.getTag();
-      const tagId = tag?.id || null;
-
-      // Utiliser le même format compressé que dans AddAnimalScreen
-      const compressedData = {
-        n: animalData.nom,
-        r: animalData.race,
-        a: animalData.age,
-        o: animalData.ownerId,
-        t: tagId,
-        pn: ownerData.nom,
-        pp: ownerData.prenom,
-        pc: ownerData.cin,
-        pt: ownerData.telephone,
-        pe: ownerData.email || "",
-      };
-
-      const jsonString = JSON.stringify(compressedData);
-
-      if (jsonString.length > 8000) {
-        Alert.alert(
-          "Attention",
-          "Les données sont trop volumineuses pour ce tag NFC.",
-        );
-      }
-
-      const bytes = Ndef.encodeMessage([Ndef.textRecord(jsonString)]);
-
-      if (bytes) {
-        await NfcManager.ndefHandler.writeNdefMessage(bytes);
-        return tagId;
-      }
-      return null;
-    } catch (error) {
-      console.error("Erreur écriture NFC:", error);
-      throw error;
-    } finally {
-      await NfcManager.cancelTechnologyRequest();
-    }
-  };
-
   const handleWrite = async () => {
     if (!nom || !race || !age) {
       Alert.alert(
@@ -152,44 +108,39 @@ export default function AddAnimalNFCScreen() {
     setLoading(true);
 
     try {
-      Alert.alert("Approchez le tag NFC pour écrire les données...");
-
-      const tagId = await writeAnimalToNfcTag(
-        { nom, race, age: parseInt(age), ownerId: userData.id },
-        {
-          nom: userData.nom,
-          prenom: userData.prenom,
-          cin: userData.cin,
-          telephone: userData.telephone,
-          email: userData.email || "",
-        },
-      );
-
-      if (!tagId) {
-        Alert.alert("Erreur", "Échec de l'écriture NFC");
-        return;
-      }
-
-      // Enregistrer dans la base de données avec la même structure qu'AddAnimalScreen
-      const animalData = {
+      // 1. L'animal est d'abord enregistré : le serveur lui attribue son identifiant public
+      const created = await animalsApi.create({
         nom,
         race,
         age: parseInt(age),
-        tagId,
-        ownerId: userData.id,
-      };
-
-      const response = await animalsApi.create(animalData);
+      });
 
       // Nettoyer les données en attente
       await AsyncStorage.removeItem("pendingAnimal");
       await AsyncStorage.setItem("cin", cin);
 
-      Alert.alert("Succès", `${nom} a été enregistré avec succès!`);
+      // 2. Le tag reçoit uniquement cet identifiant, le nom et le téléphone du propriétaire
+      const written = await writeTagWithRetry({
+        publicId: created.publicId,
+        nom,
+        telephone: userData.telephone,
+      });
+
+      Alert.alert(
+        written ? "Succès" : "Animal enregistré",
+        written
+          ? `${nom} a été enregistré avec succès !`
+          : `${nom} est enregistré, mais son tag n'a pas été écrit. Vous pourrez le programmer depuis « Modifier un animal ».`,
+      );
       navigation.navigate("Home", { screen: "Animaux" });
     } catch (error) {
       console.error("Erreur durant l'enregistrement:", error);
-      Alert.alert("Erreur", error.message || "Une erreur est survenue.");
+      Alert.alert(
+        "Erreur",
+        error.response?.data?.message ||
+          error.message ||
+          "Une erreur est survenue.",
+      );
     } finally {
       setLoading(false);
     }

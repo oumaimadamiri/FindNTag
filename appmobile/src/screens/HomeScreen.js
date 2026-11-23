@@ -13,7 +13,7 @@ import { useRoute, useNavigation } from "@react-navigation/native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { animalsApi, gpsApi } from "../api";
+import { animalsApi } from "../api";
 import Animated, {
   BounceInUp,
   FadeInDown,
@@ -243,39 +243,7 @@ export default function HomeScreen() {
 
   useEffect(() => {
     setupNotifications();
-
-    if (!userInfo?.cin) return;
-
-    const checkAnimalPosition = async () => {
-      try {
-        const savedZone = await AsyncStorage.getItem(ZONE_STORAGE_KEY);
-        const allowedZone = savedZone ? JSON.parse(savedZone) : defaultZone;
-
-        const res = { data: await gpsApi.getLocation(ANIMAL_ID) };
-        const location = {
-          latitude: parseFloat(res.data.latitude),
-          longitude: parseFloat(res.data.longitude),
-        };
-
-        if (!isInsideZone(location, allowedZone)) {
-          await Notifications.scheduleNotificationAsync({
-            content: {
-              title: "Alerte Zone",
-              body: "Votre animal est hors de la zone autorisée",
-              sound: true,
-              data: { location },
-            },
-            trigger: null,
-          });
-        }
-      } catch (error) {
-        console.error("Erreur vérification position:", error);
-      }
-    };
-
-    const interval = setInterval(checkAnimalPosition, 15 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, [userInfo]);
+  }, []);
 
   const getTimeGreeting = () => {
     const hour = new Date().getHours();

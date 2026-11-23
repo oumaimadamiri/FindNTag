@@ -2,9 +2,13 @@ import axios from 'axios';
 import { API_URL } from '../config';
 
 let authToken = null;
-// Utilisé à partir de la phase 2 (JWT)
+let onUnauthorized = null;
+
 export const setAuthToken = (token) => {
   authToken = token;
+};
+export const setUnauthorizedHandler = (handler) => {
+  onUnauthorized = handler;
 };
 
 const client = axios.create({
@@ -19,5 +23,23 @@ client.interceptors.request.use((config) => {
   }
   return config;
 });
+
+client.interceptors.response.use(
+  (response) => {
+    const type = String(response.headers?.['content-type'] ?? '');
+    if (type.includes('text/html')) {
+      throw new Error('Réponse HTML inattendue : vérifiez EXPO_PUBLIC_API_URL (port 8081 ?)');
+    }
+    return response;
+  },
+  (error) => {
+    const url = error.config?.url ?? '';
+    // Jeton expiré ou refusé (hors écrans de connexion) : on déconnecte
+    if (error.response?.status === 401 && authToken && !url.startsWith('/auth/')) {
+      onUnauthorized?.();
+    }
+    return Promise.reject(error);
+  },
+);
 
 export default client;

@@ -1,4 +1,10 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   View,
   Text,
@@ -14,9 +20,10 @@ import {
 import { WebView } from "react-native-webview";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
-import { gpsApi } from "../api";
-import { TRACKED_ANIMAL_ID } from "../config";
-import { useNavigation, useRoute } from "@react-navigation/native";
+import { animalsApi, gpsApi, trackingApi } from "../api";
+import { UserContext } from "../context/UserContext";
+import { leafletHtml } from "../map/leafletHtml";
+import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -26,44 +33,50 @@ import Animated, {
   SlideInDown,
   BounceIn,
 } from "react-native-reanimated";
-import * as Notifications from "expo-notifications";
 
-const ANIMAL_ID = TRACKED_ANIMAL_ID;
-const ZONE_STORAGE_KEY = "allowedZone";
+const SELECTED_ANIMAL_KEY = "selectedAnimalId";
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
-});
-async function registerForPushNotifications() {
-  // Vérification des permissions seulement si sur appareil physique
-  if (Platform.OS !== "web") {
-    const { status: existingStatus } =
-      await Notifications.getPermissionsAsync();
-    let finalStatus = existingStatus;
+// Zone proposée dans l'éditeur quand l'animal n'en a pas encore
+const defaultZone = [
+  { latitude: 33.53867, longitude: -7.6593 }, // Sud-Ouest
+  { latitude: 33.53867, longitude: -7.65879 }, // Sud-Est
+  { latitude: 33.53917, longitude: -7.65879 }, // Nord-Est
+  { latitude: 33.53917, longitude: -7.6593 }, // Nord-Ouest
+];
 
-    if (existingStatus !== "granted") {
-      const { status } = await Notifications.requestPermissionsAsync();
-      finalStatus = status;
-    }
+const isInsideZone = (point, zone) => {
+  if (zone.length < 3) return true; // Pas assez de points pour former une zone
 
-    if (finalStatus !== "granted") {
-      console.log("Permission refusée pour les notifications");
-      return;
-    }
+  let x = point.latitude,
+    y = point.longitude;
+  let inside = false;
+  for (let i = 0, j = zone.length - 1; i < zone.length; j = i++) {
+    const xi = zone[i].latitude,
+      yi = zone[i].longitude;
+    const xj = zone[j].latitude,
+      yj = zone[j].longitude;
+    const intersect =
+      yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi;
+    if (intersect) inside = !inside;
   }
-}
+  return inside;
+};
 
 const AnimatedTouchableOpacity =
   Animated.createAnimatedComponent(TouchableOpacity);
 
 export default function MapScreen() {
   const navigation = useNavigation();
+  const { userInfo } = useContext(UserContext);
   const webViewRef = useRef(null);
+  const lastPayloadRef = useRef(null);
+  const seqRef = useRef(0);
+  const lastInsideRef = useRef(null);
+  const recenterRef = useRef(true);
+
   const [loading, setLoading] = useState(true);
+  const [animals, setAnimals] = useState([]);
+  const [animalId, setAnimalId] = useState(null);
   const [gps, setGps] = useState(null);
   const [allowedZone, setAllowedZone] = useState([]);
   const [showZoneModal, setShowZoneModal] = useState(false);
@@ -78,149 +91,174 @@ export default function MapScreen() {
   const fabRotation = useSharedValue(0);
   const fabOpacity = useSharedValue(1);
 
-  // Zone par défaut
-  const defaultZone = [
-    { latitude: 33.53867, longitude: -7.6593 }, // Sud-Ouest
-    { latitude: 33.53867, longitude: -7.65879 }, // Sud-Est
-    { latitude: 33.53917, longitude: -7.65879 }, // Nord-Est
-    { latitude: 33.53917, longitude: -7.6593 }, // Nord-Ouest
-  ];
-
-  useEffect(() => {
-    registerForPushNotifications();
-    loadSavedZone();
-  }, []);
-
-  useEffect(() => {
-    if (allowedZone.length > 0) {
-      fetchGps();
-      const interval = setInterval(fetchGps, 10000);
-      return () => clearInterval(interval);
-    }
-  }, [allowedZone]);
-
-  const loadSavedZone = async () => {
-    try {
-      const saved = await AsyncStorage.getItem(ZONE_STORAGE_KEY);
-      if (saved) {
-        const parsedZone = JSON.parse(saved);
-        setAllowedZone(parsedZone);
-        setZonePoints(parsedZone);
-      } else {
-        setAllowedZone(defaultZone);
-        setZonePoints(defaultZone);
+  // 1. Animaux de l'utilisateur (rechargés à chaque affichage de l'onglet)
+  useFocusEffect(
+    useCallback(() => {
+      if (!userInfo?.cin) {
+        setLoading(false);
+        return undefined;
       }
-    } catch (error) {
-      console.error("Erreur chargement zone:", error);
-      setAllowedZone(defaultZone);
-      setZonePoints(defaultZone);
+      let active = true;
+      (async () => {
+        try {
+          const list = await animalsApi.listByCin(userInfo.cin);
+          const saved = Number(await AsyncStorage.getItem(SELECTED_ANIMAL_KEY));
+          if (!active) return;
+          setAnimals(list);
+          setAnimalId((current) => {
+            if (current && list.some((a) => a.id === current)) return current;
+            return (list.find((a) => a.id === saved) ?? list[0])?.id ?? null;
+          });
+        } catch (e) {
+          console.error("Erreur chargement animaux:", e.message);
+        } finally {
+          if (active) setLoading(false);
+        }
+      })();
+      return () => {
+        active = false;
+      };
+    }, [userInfo?.cin]),
+  );
+
+  // 2. Changement d'animal : on recharge sa zone depuis le serveur
+  useEffect(() => {
+    if (!animalId) return undefined;
+    lastInsideRef.current = null;
+    recenterRef.current = true;
+    setGps(null);
+    AsyncStorage.setItem(SELECTED_ANIMAL_KEY, String(animalId)).catch(() => {});
+    let active = true;
+    (async () => {
+      try {
+        const g = await trackingApi.getGeofence(animalId);
+        if (!active) return;
+        const pts = g.points ?? [];
+        setAllowedZone(pts);
+        setZonePoints(pts.length >= 3 ? pts : defaultZone);
+        setZoneAlerts(pts.length >= 3 ? g.enabled : true);
+      } catch (e) {
+        console.error("Erreur chargement zone:", e.message);
+        if (active) {
+          setAllowedZone([]);
+          setZonePoints(defaultZone);
+        }
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [animalId]);
+
+  // 3. Position + trajet, toutes les 10 secondes
+  useEffect(() => {
+    if (!animalId) return undefined;
+    fetchGps();
+    const interval = setInterval(fetchGps, 10000);
+    return () => clearInterval(interval);
+  }, [animalId, allowedZone, zoneAlerts]);
+
+  const sendToMap = (payload) => {
+    const message = JSON.stringify({ ...payload, seq: ++seqRef.current });
+    lastPayloadRef.current = message;
+    webViewRef.current?.postMessage(message);
+  };
+
+  // La carte peut finir de charger après le premier envoi : on renvoie le dernier état
+  const handleMapLoaded = () => {
+    if (lastPayloadRef.current) {
+      webViewRef.current?.postMessage(lastPayloadRef.current);
     }
   };
 
   const saveZone = async (zone) => {
     try {
-      await AsyncStorage.setItem(ZONE_STORAGE_KEY, JSON.stringify(zone));
-      setAllowedZone(zone);
+      const saved = await trackingApi.saveGeofence(animalId, {
+        enabled: true,
+        points: zone,
+      });
+      setAllowedZone(saved.points ?? zone);
+      setZoneAlerts(true);
+      lastInsideRef.current = null;
       Alert.alert("Succès", "Zone sauvegardée avec succès !");
     } catch (error) {
       console.error("Erreur sauvegarde zone:", error);
-      Alert.alert("Erreur", "Impossible de sauvegarder la zone.");
+      Alert.alert(
+        "Erreur",
+        error.response?.data?.message || "Impossible de sauvegarder la zone.",
+      );
     }
   };
 
-  const isInsideZone = (point, zone) => {
-    if (zone.length < 3) return true; // Pas assez de points pour former une zone
-
-    let x = point.latitude,
-      y = point.longitude;
-    let inside = false;
-    for (let i = 0, j = zone.length - 1; i < zone.length; j = i++) {
-      const xi = zone[i].latitude,
-        yi = zone[i].longitude;
-      const xj = zone[j].latitude,
-        yj = zone[j].longitude;
-      const intersect =
-        yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi;
-      if (intersect) inside = !inside;
+  const toggleAlerts = async (value) => {
+    setZoneAlerts(value);
+    if (allowedZone.length >= 3) {
+      try {
+        await trackingApi.saveGeofence(animalId, {
+          enabled: value,
+          points: allowedZone,
+        });
+      } catch (e) {
+        setZoneAlerts(!value);
+        Alert.alert("Erreur", "Impossible de modifier les alertes.");
+      }
     }
-    return inside;
   };
 
   const fetchGps = async () => {
+    if (!animalId) return;
     try {
-      const { latitude, longitude } = await gpsApi.getLocation(ANIMAL_ID);
-
-      const location = {
-        latitude: parseFloat(latitude),
-        longitude: parseFloat(longitude),
-      };
-
+      let location = null;
+      try {
+        const p = await gpsApi.getLocation(animalId);
+        location = {
+          latitude: parseFloat(p.latitude),
+          longitude: parseFloat(p.longitude),
+        };
+      } catch (e) {
+        if (e.response?.status !== 404) throw e; // 404 = pas encore de position
+      }
       setGps(location);
-      const isInside = isInsideZone(location, allowedZone);
-      if (zoneAlerts && !isInside) {
-        await Notifications.scheduleNotificationAsync({
-          content: {
-            title: "🚨 Alerte Zone",
-            body: "L'animal est en dehors de la zone autorisée !",
-            sound: true,
-            data: { location },
-          },
-          trigger: null, // Envoi immédiat
-        });
 
-        // Alerte visuelle
+      const trail = location
+        ? await trackingApi.getPositions(animalId, 50)
+        : [];
+      const hasZone = allowedZone.length >= 3;
+      const inside =
+        location && hasZone ? isInsideZone(location, allowedZone) : true;
+
+      // Alerte à l'écran quand l'animal vient de sortir (le serveur envoie le push)
+      const wasInside = lastInsideRef.current;
+      lastInsideRef.current = inside;
+      if (location && zoneAlerts && hasZone && !inside && wasInside !== false) {
         Alert.alert(
           "Alerte Zone",
-          "Votre animal est sorti de la zone autorisée!",
-          [
-            {
-              text: "Voir sur la carte",
-              onPress: () => {
-                // const dataToSend = {
-                //   mapCenterPosition: location,
-                //   zoom: 16,
-                // };
-                navigation.navigate("Home", { screen: "Carte" });
-                webViewRef.current.postMessage(JSON.stringify(dataToSend));
-              },
-            },
-            { text: "OK" },
-          ],
+          "Votre animal est sorti de la zone autorisée !",
         );
       }
 
-      const dataToSend = {
-        mapCenterPosition: location,
-        zoom: 16,
-        mapLayers: [
-          {
-            url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-            attribution: "© OpenStreetMap contributors",
-          },
-        ],
-        mapMarkers: [
-          {
-            position: location,
-            popup: "🐄 Localisation actuelle",
-          },
-        ],
-        mapShapes: [
-          {
-            shapeType: "polygon",
-            coordinates: allowedZone,
-            color: isInsideZone(location, allowedZone) ? "green" : "red",
-          },
-        ],
-      };
+      const recenter = recenterRef.current && !!location;
+      if (recenter) recenterRef.current = false;
+      const animalName =
+        animals.find((a) => a.id === animalId)?.nom ?? "Animal";
 
-      if (webViewRef.current) {
-        webViewRef.current.postMessage(JSON.stringify(dataToSend));
-      }
+      sendToMap({
+        center: location,
+        zoom: 16,
+        recenter,
+        marker: location
+          ? { position: location, popup: `${animalName} : dernière position` }
+          : null,
+        zone: hasZone
+          ? { coordinates: allowedZone, color: inside ? "green" : "red" }
+          : null,
+        trail: trail.map((t) => ({
+          latitude: t.latitude,
+          longitude: t.longitude,
+        })),
+      });
     } catch (e) {
       console.error("Erreur GPS:", e.message);
-      Alert.alert("Erreur", "Impossible de récupérer la position de l'animal.");
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -341,18 +379,68 @@ export default function MapScreen() {
     );
   }
 
+  if (!animalId) {
+    return (
+      <View style={styles.loading}>
+        <Ionicons name="paw-outline" size={40} color="#9CA3AF" />
+        <Text style={styles.loadingText}>
+          Ajoutez un animal pour suivre sa position.
+        </Text>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <WebView
         ref={webViewRef}
-        source={{ uri: "file:///android_asset/leaflet.html" }}
+        source={{ html: leafletHtml }}
+        originWhitelist={["*"]}
         style={styles.map}
         javaScriptEnabled
         domStorageEnabled
+        onLoadEnd={handleMapLoaded}
       />
 
       {/* Info Bar */}
       <View style={styles.infoBar}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={{ marginBottom: 8 }}
+        >
+          {animals.map((a) => (
+            <TouchableOpacity
+              key={a.id}
+              onPress={() => setAnimalId(a.id)}
+              style={[
+                styles.animalChip,
+                a.id === animalId && styles.animalChipActive,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.animalChipText,
+                  a.id === animalId && styles.animalChipTextActive,
+                ]}
+              >
+                {a.nom}
+              </Text>
+            </TouchableOpacity>
+          ))}
+          <TouchableOpacity
+            style={styles.animalChip}
+            onPress={() =>
+              navigation.navigate("Tracker", {
+                animalId,
+                animalName: animals.find((a) => a.id === animalId)?.nom,
+              })
+            }
+          >
+            <Ionicons name="hardware-chip-outline" size={14} color="#6B7280" />
+            <Text style={styles.animalChipText}> Traceur</Text>
+          </TouchableOpacity>
+        </ScrollView>
         <View style={styles.infoItem}>
           <Ionicons name="location" size={16} color="#007AFF" />
           <Text style={styles.infoText}>
@@ -399,7 +487,7 @@ export default function MapScreen() {
           <Text style={styles.alertText}>Alertes</Text>
           <Switch
             value={zoneAlerts}
-            onValueChange={setZoneAlerts}
+            onValueChange={toggleAlerts}
             trackColor={{ false: "#D1D5DB", true: "#60A5FA" }}
             thumbColor={zoneAlerts ? "#007AFF" : "#9CA3AF"}
           />
@@ -607,6 +695,18 @@ const styles = StyleSheet.create({
     color: "#6B7280",
     fontWeight: "500",
   },
+  animalChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginRight: 8,
+    borderRadius: 16,
+    backgroundColor: "#F3F4F6",
+  },
+  animalChipActive: { backgroundColor: "#007AFF" },
+  animalChipText: { fontSize: 13, color: "#4B5563", fontWeight: "500" },
+  animalChipTextActive: { color: "#FFFFFF" },
   infoBar: {
     position: "absolute",
     top: 50,

@@ -27,7 +27,7 @@ export default function ProfileScreen({ navigation }) {
   const [loading, setLoading] = useState(true);
   const [imageLoading, setImageLoading] = useState(false);
   const scaleValue = new Animated.Value(1);
-  const { setUserInfo } = useContext(UserContext);
+  const { logout } = useContext(UserContext);
 
   useEffect(() => {
     const fetchUserData = async () => {
@@ -229,11 +229,18 @@ export default function ProfileScreen({ navigation }) {
             onPress: async () => {
               try {
                 await usersApi.remove(userData.id);
+                await AsyncStorage.removeItem(`profileImage_${cin}`);
+                await logout();
+                Alert.alert(
+                  "Compte supprimé",
+                  "Votre compte a bien été supprimé.",
+                );
               } catch (error) {
                 console.error("Erreur suppression compte :", error);
                 Alert.alert(
                   "Erreur",
-                  "Une erreur est survenue lors de la suppression.",
+                  error.response?.data?.message ||
+                    "Une erreur est survenue lors de la suppression.",
                 );
               }
             },
@@ -247,9 +254,7 @@ export default function ProfileScreen({ navigation }) {
   };
 
   const handleLogout = async () => {
-    await AsyncStorage.removeItem("cin");
-    setUserInfo(null);
-    navigation.replace("Start");
+    await logout(); // efface le jeton et renvoie à l'écran Start
   };
 
   if (loading) {

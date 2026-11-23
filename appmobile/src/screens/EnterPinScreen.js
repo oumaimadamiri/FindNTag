@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useContext } from "react";
+import { UserContext } from "../context/UserContext";
 import {
   View,
   Text,
@@ -25,15 +26,15 @@ import { LinearGradient } from "expo-linear-gradient";
 const { width } = Dimensions.get("window");
 
 export default function EnterPinScreen({ route, navigation }) {
-  const { email, mode, userInfo, redirectTo = "Home" } = route.params;
+  const { cin, maskedEmail, redirectTo = "Home" } = route.params;
+  const { login } = useContext(UserContext);
 
-  // Vérifie que email est fourni
   useEffect(() => {
-    if (!email || !email.includes("@")) {
-      Alert.alert("Erreur", "Email invalide ou manquant.");
+    if (!cin) {
+      Alert.alert("Erreur", "CIN manquant.");
       navigation.goBack();
     }
-  }, [email]);
+  }, [cin]);
 
   const [pin, setPin] = useState("");
   const [error, setError] = useState(false);
@@ -139,11 +140,8 @@ export default function EnterPinScreen({ route, navigation }) {
     );
 
     try {
-      if (mode === "register") {
-        await authApi.setOtp(email, pin);
-      } else {
-        await authApi.verifyOtp(email, pin);
-      }
+      const { token, user } = await authApi.verifyOtp(cin, pin);
+      await login(token, user);
       buttonScale.value = withTiming(1, { duration: 300 });
       setIsValidating(false);
       setError(false);
@@ -151,12 +149,9 @@ export default function EnterPinScreen({ route, navigation }) {
         withTiming(1.2, { duration: 300 }),
         withTiming(1, { duration: 300 }),
       );
-      if (userInfo) {
-        await AsyncStorage.setItem("userInfo", JSON.stringify(userInfo));
-      }
       navigation.reset({
         index: 0,
-        routes: [{ name: redirectTo, params: { userInfo } }],
+        routes: [{ name: redirectTo, params: { userInfo: user } }],
       });
     } catch (e) {
       setError(true);
