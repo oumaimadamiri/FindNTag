@@ -1,0 +1,85 @@
+# ---------- Secrets & variables d'environnement ----------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p8
+*.p12
+*.jks
+*.keystore
+*.mobileprovision
+google-services.json
+GoogleService-Info.plist
+
+# ---------- Fichiers uploadés / données locales ----------
+uploads/
+*.sqlite
+*.db
+*.log
+
+# ---------- Backend (Spring Boot / Maven) ----------
+target/
+HELP.md
+.mvn/timing.properties
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+/nbproject/private/
+/nbbuild/
+/nbdist/
+/.nb-gradle/
+
+# ---------- Python (mon_projet_mrz) ----------
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# ---------- Mobile (Expo / React Native) ----------
+node_modules/
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+*.orig.*
+.metro-health-check*
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+*.tsbuildinfo
+
+# Dossiers natifs générés par "expo prebuild"
+appmobile/android/
+appmobile/ios/
+
+# Android / Gradle (si les dossiers natifs sont un jour versionnés)
+build/
+.gradle/
+local.properties
+*.iml
+*.hprof
+.cxx/
+*.jsbundle
+
+# iOS / Xcode
+Pods/
+xcuserdata
+DerivedData
+*.ipa
+*.xcuserstate
+*.xccheckout
+*.moved-aside
+*.hmap
+.xcode.env.local
+
+# ---------- IDE / OS ----------
+.vscode/
+.idea/
+*.iws
+*.ipr
+.DS_Store
