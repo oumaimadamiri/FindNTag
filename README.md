@@ -1,6 +1,6 @@
 # FindNTag : identification et suivi d'animaux (NFC, GPS, CIN)
 
-> Projet académique. Application mobile, API REST et services IoT pour **identifier** un animal grâce à un tag NFC, **suivre sa position** avec un traceur GPS, et **gérer sa propriété** entre des utilisateurs identifiés par leur carte d'identité nationale (CIN).
+> Projet académique réalisé en binôme. Application mobile, API REST et services IoT pour **identifier** un animal grâce à un tag NFC, **suivre sa position** avec un traceur GPS, et **gérer sa propriété** entre des utilisateurs identifiés par leur carte d'identité nationale (CIN).
 
 ## Sommaire
 1. [Fonctionnalités](#fonctionnalités)
@@ -17,6 +17,7 @@
 12. [Tests](#tests)
 13. [Dépannage](#dépannage)
 14. [Structure du dépôt](#structure-du-dépôt)
+15. [Auteurs](#auteurs)
 
 ---
 
@@ -350,3 +351,11 @@ mon_projet_mrz/
   mqtt_to_http_bridge.py    pont MQTT -> backend
   tests/
 ```
+## Auteurs
+
+| Nom | Rôle |
+|---|---|
+| **Oumaima Damiri** | Développeuse Full-Stack & IoT |
+| **Jihane EL Berkaoui** | Développeuse Full-Stack |
+
+**Superviseur :** Pr. Errais Mohammed Amine
