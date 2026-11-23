@@ -476,12 +476,12 @@ Ils couvrent :
 
 ---
 
-## Auteurs
+## 👥 Auteurs
 
 | Nom | Rôle |
 |---|---|
 | **Oumaima Damiri** | Développeuse Full-Stack & IoT |
-| **Jihane EL Berkaoui** | Développeuse Full-Stack |
+| **Jihane El Berkaoui** | Développeuse Full-Stack |
 
 **Superviseur :** Pr. Errais Mohammed Amine
 
