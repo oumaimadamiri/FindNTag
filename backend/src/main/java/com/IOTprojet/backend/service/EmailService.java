@@ -1,6 +1,9 @@
 package com.IOTprojet.backend.service;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.stereotype.Service;
@@ -8,10 +11,12 @@ import org.springframework.stereotype.Service;
 @Service
 public class EmailService {
 
+    private static final Logger log = LoggerFactory.getLogger(EmailService.class);
+
     @Autowired
     private JavaMailSender mailSender;
 
-    @org.springframework.beans.factory.annotation.Value("${spring.mail.username}")
+    @Value("${spring.mail.username}")
     private String from;
 
     public void sendEmail(String to, String subject, String body) {
@@ -21,17 +26,11 @@ public class EmailService {
             message.setTo(to);
             message.setSubject(subject);
             message.setText(body);
-            
             mailSender.send(message);
-            System.out.println("Email envoyé avec succès à: " + to);
+            log.info("Email envoyé");   // ni destinataire ni contenu : le corps contient un code de vérification
         } catch (Exception e) {
-            System.err.println("Erreur lors de l'envoi de l'email: " + e.getMessage());
+            log.error("Échec d'envoi de l'email : {}", e.getMessage());
             throw new RuntimeException("Impossible d'envoyer l'email", e);
         }
-    }
-    
-    // Méthode de compatibilité avec l'ancien code
-    public void sendEmail(String to, String body) {
-        sendEmail(to, "Code de vérification", body);
     }
 }

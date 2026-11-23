@@ -1,6 +1,7 @@
 package com.IOTprojet.backend.entity;
 
 import jakarta.persistence.*;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonManagedReference;
 import java.util.List;
 
@@ -25,7 +26,14 @@ public class User {
 
     private String telephone;
 
-       @OneToMany(mappedBy = "owner", cascade = CascadeType.ALL)
+    /** Jeton de notification push Expo (jamais renvoyé au client). */
+    @JsonIgnore
+    private String expoPushToken;
+
+    public String getExpoPushToken() { return expoPushToken; }
+    public void setExpoPushToken(String expoPushToken) { this.expoPushToken = expoPushToken; }
+
+    @OneToMany(mappedBy = "owner", cascade = CascadeType.ALL)
     @JsonManagedReference
     private List<Animal> animals;
 

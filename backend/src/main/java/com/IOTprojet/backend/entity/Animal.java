@@ -15,19 +15,15 @@ public class Animal {
     private String age;
     private String tagId;
 
-    private String latitude;
-   
-    private String longitude;
+    /** Identifiant public aléatoire, écrit sur le tag NFC à la place des données personnelles. */
+    @Column(name = "public_id", unique = true, length = 36)
+    private String publicId;
 
     @ManyToOne
     @JoinColumn(name = "owner_id")
     @JsonBackReference
     private User owner;
 
-    // @Column(name = "file_url")
-    // private String fileUrl;
-
-    // Assurez-vous que votre entité Animal contient :
     @Column(name = "file_url", length = 500)
     private String fileUrl;
 
@@ -55,22 +51,16 @@ public class Animal {
     public String getTagId() { return tagId; }
     public void setTagId(String tagId) { this.tagId = tagId; }
 
+    public String getPublicId() { return publicId; }
+    public void setPublicId(String publicId) { this.publicId = publicId; }
+
     public User getOwner() { return owner; }
     public void setOwner(User owner) { this.owner = owner; }
-    public String getLatitude() {
-        return latitude;
-    }
-    
-    public void setLatitude(String latitude) {
-        this.latitude = latitude;
-    }
-    
-    public String getLongitude() {
-        return longitude;
-    }
-    
-    public void setLongitude(String longitude) {
-        this.longitude = longitude;
+
+    @PrePersist
+    void ensurePublicId() {
+        if (publicId == null) {
+            publicId = java.util.UUID.randomUUID().toString();
+        }
     }
 }
-

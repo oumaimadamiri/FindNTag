@@ -12,7 +12,6 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/ocr")
-@CrossOrigin(origins = "*")
 public class OcrController {
 
     private static final Logger log = LoggerFactory.getLogger(OcrController.class);

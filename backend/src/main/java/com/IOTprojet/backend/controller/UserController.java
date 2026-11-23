@@ -1,114 +1,77 @@
 package com.IOTprojet.backend.controller;
 
 import com.IOTprojet.backend.entity.User;
-import com.IOTprojet.backend.repository.UserRepository;
-// import com.IOTprojet.backend.entity.Animal;
+import com.IOTprojet.backend.security.CurrentUser;
 import com.IOTprojet.backend.service.UserService;
-
-import jakarta.persistence.EntityNotFoundException;
-
-import com.IOTprojet.backend.service.AnimalService;
-
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
-import java.util.Collections;
-import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/users")
-@CrossOrigin(origins = "*")
 public class UserController {
-    @Autowired
-    private UserRepository userRepository;
-    @Autowired
-    private UserService userService;
 
-    @SuppressWarnings("unused")
-    @Autowired
-    private AnimalService animalService;
+    private final UserService userService;
 
-    @PostMapping
-    public ResponseEntity<?> createUser(@RequestBody User user) {
-        try {
-            if (userService.existsByCin(user.getCin())) {
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                        .body(Map.of("message", "CIN déjà utilisé"));
-            }
-
-            User savedUser = userService.createUser(user);
-            return new ResponseEntity<>(savedUser, HttpStatus.CREATED);
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("message", "Erreur lors de la création: " + e.getMessage()));
-        }
+    public UserController(UserService userService) {
+        this.userService = userService;
     }
 
-    @GetMapping("/check_cin/{cin}")
-    public ResponseEntity<?> checkCinExists(@PathVariable String cin) {
-        boolean exists = userService.existsByCin(cin);
-        return ResponseEntity.ok(Collections.singletonMap("exists", exists));
+    @GetMapping("/me")
+    public User me() {
+        return userService.getUserByCin(CurrentUser.cin());
     }
+
+    /** Compatibilité avec l'app : uniquement son propre profil. */
     @GetMapping("/{cin}")
-    public ResponseEntity<?> getUserByCin(@PathVariable String cin) {
-        Optional<User> user = userRepository.findByCin(cin);
-        if (user.isPresent()) {
-            return ResponseEntity.ok(user.get());
-        } else {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Utilisateur introuvable");
-        }
+    public User getByCin(@PathVariable String cin) {
+        CurrentUser.requireSelf(cin);
+        return userService.getUserByCin(cin.trim());
     }
 
-    @GetMapping
-    public ResponseEntity<List<User>> getAllUsers() {
-        return ResponseEntity.ok(userService.getAllUsers());
+    /** Infos minimales d'un acheteur (vente d'un animal). */
+    @GetMapping("/lookup/{cin}")
+    public Map<String, String> lookup(@PathVariable String cin) {
+        User u = userService.findByCin(cin.toUpperCase())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Utilisateur introuvable"));
+        return Map.of("cin", u.getCin(), "nom", u.getNom(), "prenom", u.getPrenom(),
+                "telephone", u.getTelephone() == null ? "" : u.getTelephone());
     }
-    
+
+    @PutMapping("/me/push-token")
+    public Map<String, String> savePushToken(@RequestBody Map<String, String> body) {
+        String token = body.get("token");
+        if (token == null || !token.startsWith("ExponentPushToken[") || token.length() > 200) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Jeton push invalide");
+        }
+        User user = userService.getUserByCin(CurrentUser.cin());
+        user.setExpoPushToken(token);
+        userService.saveUser(user);
+        return Map.of("message", "OK");
+    }
+
+    @DeleteMapping("/me")
+    public Map<String, String> deleteMe() {
+        return deleteAccount(CurrentUser.cin());
+    }
+
+    /** Compatibilité avec l'app : uniquement son propre identifiant. */
     @DeleteMapping("/{id}")
-    public ResponseEntity<?> deleteUser(@PathVariable Long id) {
-        try {
-            User user = userService.getUserById(id);
-
-            if (!user.getAnimals().isEmpty()) {
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                        .body(Map.of("message", "Impossible de supprimer : l'utilisateur a des animaux associés"));
-            }
-
-            userService.deleteUser(id);
-            return ResponseEntity.ok(Map.of("message", "Utilisateur supprimé avec succès"));
-        } catch (jakarta.persistence.EntityNotFoundException e) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(Map.of("message", e.getMessage()));
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("message", "Erreur lors de la suppression: " + e.getMessage()));
-        }
-    }
-    @DeleteMapping("/by-cin/{cin}")
-    public ResponseEntity<?> deleteUserByCin(@PathVariable String cin) {
-        try {
-            User user = userService.getUserByCin(cin);
-
-            if (!user.getAnimals().isEmpty()) {
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                        .body(Map.of("message", "Impossible de supprimer : l'utilisateur a des animaux associés"));
-            }
-
-            userService.deleteUser(user.getId());
-            return ResponseEntity.ok(Map.of("message", "Utilisateur supprimé avec succès"));
-        } catch (EntityNotFoundException e) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(Map.of("message", e.getMessage()));
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("message", "Erreur lors de la suppression: " + e.getMessage()));
-        }
+    public Map<String, String> deleteById(@PathVariable Long id) {
+        User u = userService.getUserById(id);
+        CurrentUser.requireSelf(u.getCin());
+        return deleteAccount(u.getCin());
     }
 
-
+    private Map<String, String> deleteAccount(String cin) {
+        User u = userService.getUserByCin(cin);
+        if (u.getAnimals() != null && !u.getAnimals().isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Impossible de supprimer : l'utilisateur a des animaux associés");
+        }
+        userService.deleteUser(u.getId());
+        return Map.of("message", "Utilisateur supprimé avec succès");
+    }
 }
-

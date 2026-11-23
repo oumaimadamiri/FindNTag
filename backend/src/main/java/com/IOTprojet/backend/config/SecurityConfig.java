@@ -1,14 +1,20 @@
 package com.IOTprojet.backend.config;
 
+import com.IOTprojet.backend.security.JwtAuthFilter;
+import com.IOTprojet.backend.security.JwtService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.HttpStatusEntryPoint;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -29,18 +35,25 @@ public class SecurityConfig {
     }
 
     @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain securityFilterChain(HttpSecurity http, JwtService jwtService) throws Exception {
         http
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
             .csrf(csrf -> csrf.disable())
+            .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                // Phase 1 : routes encore ouvertes (protégées par JWT en phase 2)
-                .requestMatchers("/api/users/**", "/api/animals/**", "/api/auth/**",
-                                 "/api/gps/**", "/api/ocr/**", "/error").permitAll()
-                .requestMatchers(HttpMethod.GET, "/uploads/**").permitAll()
+                .requestMatchers("/error", "/actuator/health").permitAll()
+                .requestMatchers("/api/auth/register", "/api/auth/request-otp", "/api/auth/verify-otp").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/ocr/cin").permitAll()
+                // Ingestion GPS : protégée par la clé X-Device-Key (vérifiée dans GpsController)
+                .requestMatchers(HttpMethod.POST, "/api/gps/ingest").permitAll()
+                // Personne qui retrouve un animal, sans compte
+                .requestMatchers(HttpMethod.GET, "/api/animals/photo/*", "/uploads/**", "/api/public/**").permitAll()
                 .anyRequest().authenticated()
             )
-            .httpBasic(httpBasic -> httpBasic.disable());
+            .exceptionHandling(e -> e.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
+            .addFilterBefore(new JwtAuthFilter(jwtService), UsernamePasswordAuthenticationFilter.class)
+            .httpBasic(h -> h.disable())
+            .formLogin(f -> f.disable());
         return http.build();
     }
 

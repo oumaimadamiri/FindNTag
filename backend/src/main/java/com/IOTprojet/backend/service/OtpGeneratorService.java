@@ -1,13 +1,15 @@
 package com.IOTprojet.backend.service;
 
 import org.springframework.stereotype.Service;
-import java.util.Random;
+
+import java.security.SecureRandom;
 
 @Service
 public class OtpGeneratorService {
 
+    private final SecureRandom random = new SecureRandom();
+
     public String generateOtp() {
-        // Génère un code OTP aléatoire de 6 chiffres
-        return String.format("%06d", new Random().nextInt(1000000));
+        return String.format("%06d", random.nextInt(1_000_000));
     }
 }
